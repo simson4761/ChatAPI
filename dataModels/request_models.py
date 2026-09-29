@@ -54,3 +54,8 @@ class SignUpRequest(BaseModel):
 class SaveFcmTokenRequest(BaseModel):
     fcm_token: str
     user_platform: str
+
+
+class UpdateUserRequest(BaseModel):
+    user_status: str
+    timestamp: int

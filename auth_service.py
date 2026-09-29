@@ -6,6 +6,8 @@ from argon2.exceptions import VerifyMismatchError, InvalidHashError
 from fastapi import HTTPException, Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
+from starlette import status
+from starlette.websockets import WebSocket
 
 SECRET_KEY = "load-from-env"  # os.environ["SECRET_KEY"]
 ALGORITHM = "HS256"
@@ -52,5 +54,37 @@ def get_current_user_id(
     user_id = payload.get("sub")
     if not user_id or payload.get("type") != "access":
         raise HTTPException(status_code=401, detail="Invalid authentication token")
+
+    return user_id
+
+
+async def get_current_user_id_ws(websocket: WebSocket) -> str | None:
+    """
+    Same validation as get_current_user_id, but reads the token from
+    a WebSocket instead of an HTTP Request, since HTTPBearer/Depends
+    doesn't work on websocket routes.
+    Returns None (and closes the socket) if auth fails.
+    """
+    auth_header = websocket.headers.get("Authorization")
+    token = None
+    if auth_header and auth_header.lower().startswith("bearer "):
+        token = auth_header[7:].strip()
+    if token is None:
+        token = websocket.query_params.get("token")  # fallback
+
+    if token is None:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return None
+
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except JWTError:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return None
+
+    user_id = payload.get("sub")
+    if not user_id or payload.get("type") != "access":
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return None
 
     return user_id

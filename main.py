@@ -1,6 +1,6 @@
 from fastapi import HTTPException
 
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect
 from firebase_admin.messaging import UnregisteredError
 from sqlalchemy import text, func, update
 from sqlalchemy.exc import IntegrityError, OperationalError
@@ -21,10 +21,12 @@ from dataModels.databaseModels.ParticipantDB import ParticipantDB
 from dataModels.databaseModels.UserTokensDB import UserTokensDB
 from dataModels.messageModels import ChatMessage
 from dataModels.request_models import CreateConversationRequest, MessageDeleteRequest, SendChatMessageRequest, \
-    LogOutRequest, SignUpRequest, SaveFcmTokenRequest, LoginRequest
+    LogOutRequest, SignUpRequest, SaveFcmTokenRequest, LoginRequest, UpdateUserRequest
 from database import engine, session
+from websocket_service import WebSocketManager
 
 app = FastAPI()
+web_socket_manager = WebSocketManager()
 
 app.include_router(api_routers.auth_router)
 app.include_router(api_routers.user_router)
@@ -331,6 +333,39 @@ def update_fcm_token(
 
     finally:
         db.close()
+
+
+################################################################################################################
+# Websocket connection
+################################################################################################################
+
+
+@app.websocket("/websocket")
+async def websocket(
+        ws: WebSocket
+):
+    user_id = await auth_service.get_current_user_id_ws(ws)
+    if user_id is None:
+        return
+    await web_socket_manager.connect(user_id=user_id, ws=ws)
+    try:
+        while True:
+            data = await ws.receive_json()
+            type_val = data.get("type")
+            if type_val == "status_check":
+                target_id = data.get("user_id")
+                status = "online" if web_socket_manager.is_online(target_id=target_id) else "offline"
+                await ws.send_json(
+                    data={
+                        "user_id": target_id,
+                        "type": "broadcast",
+                        "status": status
+                    }
+                )
+    except WebSocketDisconnect:
+        pass
+    finally:
+        web_socket_manager.disconnect(user_id=user_id,ws=ws)
 
 
 ################################################################################################################
@@ -712,22 +747,38 @@ def new_messages(
             .order_by(ChatMessageDB.timestamp.asc())
             .all()
         )
+
+        participants = (
+            db.query(ParticipantDB)
+            .join(
+                ConversationParticipantsDB,
+                ConversationParticipantsDB.user_id == ParticipantDB.user_id,
+            )
+            .filter(ConversationParticipantsDB.thread_id == thread_id)
+            .all()
+        )
+
+        messages = [
+            ChatMessage(
+                id=m.chat_id,
+                thread_id=m.thread_id,
+                user_id=m.user_id,
+                text=m.text,
+                type=m.type,
+                timestamp=m.timestamp,
+                status=m.status
+            )
+            for m in messages
+        ]
+
         return {
             "success": True,
             "response_code": 200,
             "response_message": "Request successful",
-            "data": [
-                ChatMessage(
-                    id=m.chat_id,
-                    thread_id=m.thread_id,
-                    user_id=m.user_id,
-                    text=m.text,
-                    type=m.type,
-                    timestamp=m.timestamp,
-                    status=m.status
-                )
-                for m in messages
-            ],
+            "data": {
+                "participants": participants,
+                "messages": messages
+            },
             "error": None
         }
 
@@ -795,8 +846,6 @@ def send_message(
             )
 
             user_tokens.append(user_token)
-
-
 
         if len(user_tokens) > 0:
             for user in user_tokens:
@@ -1011,6 +1060,68 @@ def get_all_users(
             "data": users,
             "error": None
         }
+
+    except HTTPException:
+        raise  # let FastAPI handle expected errors as-is
+
+    except IntegrityError as e:
+        db.rollback()
+        logger.warning(f"Integrity error updating message: {e}")
+        raise HTTPException(409, "Conflict updating message")
+
+    except OperationalError as e:
+        db.rollback()
+        logger.error(f"DB connection/operational error: {e}")
+        raise HTTPException(503, "Database unavailable, try again later")
+
+    except Exception as e:
+        db.rollback()
+        logger.exception(f"Unexpected error updating message: {e}")
+        raise HTTPException(500, "Internal server error")
+
+    finally:
+        db.close()
+
+
+@api_routers.user_router.post("/update")
+def update_user_status(
+        request: UpdateUserRequest,
+        user_id: str = Depends(get_current_user_id)
+):
+    db = session()
+    try:
+        user = db.query(ParticipantDB).filter(ParticipantDB.user_id == user_id)
+
+        if user is None:
+            return {
+                "success": False,
+                "response_code": 200,
+                "response_message": "User not found",
+                "data": None,
+                "error": None
+            }
+
+        result = db.execute(
+            update(ParticipantDB)
+            .where(ParticipantDB.user_id == user_id)
+            .values(
+
+            )
+        )
+
+        db.commit()
+
+        db.refresh(user)
+
+        return {
+            "success": True,
+            "response_code": 200,
+            "response_message": "User updated successfully",
+            "data": Participant.model_validate(user).model_dump(),
+            "error": None
+        }
+
+
 
     except HTTPException:
         raise  # let FastAPI handle expected errors as-is
