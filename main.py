@@ -1,3 +1,6 @@
+import asyncio
+import time
+
 from fastapi import HTTPException
 
 from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect
@@ -23,10 +26,12 @@ from dataModels.messageModels import ChatMessage
 from dataModels.request_models import CreateConversationRequest, MessageDeleteRequest, SendChatMessageRequest, \
     LogOutRequest, SignUpRequest, SaveFcmTokenRequest, LoginRequest, UpdateUserRequest
 from database import engine, session
+from thread_listener_service import ThreadListener
 from websocket_service import WebSocketManager
 
 app = FastAPI()
 web_socket_manager = WebSocketManager()
+thread_listener = ThreadListener()
 
 app.include_router(api_routers.auth_router)
 app.include_router(api_routers.user_router)
@@ -37,6 +42,8 @@ logger = logging.getLogger(__name__)
 
 # Base.metadata.drop_all(engine)
 Base.metadata.create_all(engine)
+
+observe_thread_timeout = 45
 
 
 ################################################################################################################
@@ -365,7 +372,7 @@ async def websocket(
     except WebSocketDisconnect:
         pass
     finally:
-        web_socket_manager.disconnect(user_id=user_id,ws=ws)
+        web_socket_manager.disconnect(user_id=user_id, ws=ws)
 
 
 ################################################################################################################
@@ -732,29 +739,21 @@ def fetchAllMessages(
 
 
 @api_routers.message_router.get("/new")
-def new_messages(
+async def new_messages(
         thread_id: str,
         after_timestamp: str,
         user_id: str = Depends(get_current_user_id)
 ):
     db = session()
+    expiry_at = time.monotonic() + observe_thread_timeout
+    event = thread_listener.subscribe(thread_id=thread_id)
     try:
-
+        event.clear()
         messages = (
             db.query(ChatMessageDB)
             .filter(ChatMessageDB.thread_id == thread_id)
             .filter(ChatMessageDB.timestamp > int(after_timestamp))
             .order_by(ChatMessageDB.timestamp.asc())
-            .all()
-        )
-
-        participants = (
-            db.query(ParticipantDB)
-            .join(
-                ConversationParticipantsDB,
-                ConversationParticipantsDB.user_id == ParticipantDB.user_id,
-            )
-            .filter(ConversationParticipantsDB.thread_id == thread_id)
             .all()
         )
 
@@ -771,16 +770,33 @@ def new_messages(
             for m in messages
         ]
 
-        return {
-            "success": True,
-            "response_code": 200,
-            "response_message": "Request successful",
-            "data": {
-                "participants": participants,
-                "messages": messages
-            },
-            "error": None
-        }
+        if len(messages) > 0:
+            return {
+                "success": True,
+                "response_code": 200,
+                "response_message": "Request successful",
+                "data": {
+                    "messages": messages
+                },
+                "error": None
+            }
+
+        remaining = expiry_at - time.monotonic()
+        if remaining < 0:
+            return {
+                "success": True,
+                "response_code": 200,
+                "response_message": "Request successful",
+                "data": {
+                    "messages": []
+                },
+                "error": None
+            }
+
+        try:
+            await asyncio.wait_for(event.wait(), timeout=remaining)
+        except asyncio.TimeoutError:
+            pass  # loop once more, then return empty
 
     except HTTPException:
         raise
@@ -802,6 +818,7 @@ def new_messages(
 
     finally:
         db.close()
+        thread_listener.unsubscribe(thread_id=thread_id, event=event)
 
 
 @api_routers.message_router.post("/send")
@@ -828,6 +845,8 @@ def send_message(
         db.commit()
 
         db.refresh(msg_db)
+
+        thread_listener.notify(thread_id=message.thread_id)
 
         conversation_participants = (
             db.query(ConversationParticipantsDB)

@@ -22,7 +22,7 @@ def create_access_token(user_id: str) -> str:
     payload = {
         "sub": str(user_id),
         "iat": now,
-        "exp": now + ACCESS_TOKEN_TTL,
+        # "exp": now + ACCESS_TOKEN_TTL,
         "type": "access",
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
