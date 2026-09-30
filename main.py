@@ -855,6 +855,12 @@ def send_message(
             .all()
         )
 
+
+        sender = (
+            db.query(ParticipantDB)
+            .filter(ParticipantDB.user_id == user_id)
+            .first()
+        )
         user_tokens = []
 
         for participant in conversation_participants:
@@ -874,7 +880,7 @@ def send_message(
                         thread_id=message.thread_id,
                         fcm_token=user.fcm_token,
                         message=message.text,
-                        sender_name=user.user_name
+                        sender_name=sender.name
                     )
 
                 except UnregisteredError:
