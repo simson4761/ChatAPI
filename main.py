@@ -12,9 +12,8 @@ import logging
 from sqlalchemy.orm import joinedload
 
 import api_routers
-import auth_service
-import push_notification
-from auth_service import get_current_user_id
+from service import auth_service, push_notification_service
+from service.auth_service import get_current_user_id
 from dataModels.conversationModels import Conversation, Participant
 from dataModels.databaseModels.Base import Base
 from dataModels.databaseModels.ChatMessageDB import ChatMessageDB
@@ -26,8 +25,8 @@ from dataModels.messageModels import ChatMessage
 from dataModels.request_models import CreateConversationRequest, MessageDeleteRequest, SendChatMessageRequest, \
     LogOutRequest, SignUpRequest, SaveFcmTokenRequest, LoginRequest, UpdateUserRequest
 from database import engine, session
-from thread_listener_service import ThreadListener
-from websocket_service import WebSocketManager
+from service.thread_listener_service import ThreadListener
+from service.websocket_service import WebSocketManager
 
 app = FastAPI()
 web_socket_manager = WebSocketManager()
@@ -875,7 +874,7 @@ def send_message(
         if len(user_tokens) > 0:
             for user in user_tokens:
                 try:
-                    push_notification.send_push_notification(
+                    push_notification_service.send_push_notification(
                         chat_id=message.id,
                         thread_id=message.thread_id,
                         fcm_token=user.fcm_token,
