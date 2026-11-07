@@ -27,6 +27,7 @@ from dataModels.request_models import CreateConversationRequest, MessageDeleteRe
 from database import engine, session
 from service.thread_listener_service import ThreadListener
 from service.websocket_service import WebSocketManager
+from dotenv import load_dotenv
 
 app = FastAPI()
 web_socket_manager = WebSocketManager()
@@ -38,6 +39,8 @@ app.include_router(api_routers.conversation_router)
 app.include_router(api_routers.message_router)
 
 logger = logging.getLogger(__name__)
+
+load_dotenv()
 
 # Base.metadata.drop_all(engine)
 Base.metadata.create_all(engine)

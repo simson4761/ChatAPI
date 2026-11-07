@@ -1,10 +1,15 @@
 import firebase_admin
 from firebase_admin import credentials, messaging
 import logging
+import os
+from dotenv import load_dotenv
 
-creds = credentials.Certificate("/Users/simson/PycharmProjects/chatAPI/privateKeys/service_account_key.json")
+load_dotenv()
+
+key_path = os.getenv("FIREBASE_KEY_PATH")
+
+creds = credentials.Certificate(key_path)
 firebase_admin.initialize_app(credential=creds)
-
 
 logging.basicConfig(level=logging.INFO)
 

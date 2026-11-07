@@ -1,4 +1,5 @@
 import uuid
+import os
 from datetime import timedelta, datetime, timezone
 
 from argon2 import PasswordHasher
@@ -8,8 +9,11 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from starlette import status
 from starlette.websockets import WebSocket
+from dotenv import load_dotenv
 
-SECRET_KEY = "load-from-env"  # os.environ["SECRET_KEY"]
+load_dotenv()
+
+SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_TTL = timedelta(minutes=60)
 
